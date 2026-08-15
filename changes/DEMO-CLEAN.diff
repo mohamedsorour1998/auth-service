@@ -1,0 +1,4 @@
+--- a/app/auth.py
++++ b/app/auth.py
+@@
++ok
