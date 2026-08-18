@@ -1,0 +1,60 @@
+diff --git a/app/middleware/rate_limiter.py b/app/middleware/rate_limiter.py
+new file mode 100644
+--- /dev/null
++++ b/app/middleware/rate_limiter.py
+@@ -0,0 +1,53 @@
+"""
+Rate limiting middleware for tracking login attempts per IP address.
+"""
+
+import time
+from functools import wraps
+from flask import request, jsonify
+from app.services.redis_service import RedisService
+from app.logger import logger
+
+# Configuration
+MAX_LOGIN_ATTEMPTS = 5
+TIME_WINDOW_SECONDS = 300  # 5 minutes
+
+redis_service = RedisService()
+
+
+def rate_limit_login(max_attempts: int, window_seconds: int):
+    """
+    Decorator to rate limit login attempts per IP address.
+    
+    Args:
+        max_attempts (int): Maximum allowed attempts within the time window.
+        window_seconds (int): Time window in seconds for rate limiting.
+    """ 
+    
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            ip = request.remote_addr
+            current_time = int(time.time())
+
+            # Key for storing login attempts in Redis
+            key = f'login_attempts:{ip}'
+
+            # Get current attempts from Redis
+            attempts = redis_service.get(key)
+            if attempts is None:
+                attempts = 0
+            else:
+                attempts = int(attempts)
+
+            # Check if the user has exceeded the limit
+            if attempts >= max_attempts:
+                logger.warning(f"Rate limit exceeded for IP: {ip}")
+                return jsonify({"error": "Too many login attempts. Please try again later."}), 429
+
+            # Increment the attempt count in Redis with TTL on every increment
+            redis_service.setex(key, window_seconds, int(attempts) + 1)
+            logger.info(f"Login attempt recorded for IP: {ip}. Total attempts: {int(attempts) + 1}")
+
+            return func(*args, **kwargs)
+
+        return wrapper
+    return decorator
