@@ -1,0 +1,43 @@
+--- a/app/auth/routes.py
++++ b/app/auth/routes.py
+@@ -1,21 +1,35 @@
+ from flask import request, jsonify
+-import redis
+
+-AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
+-AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
++
++import os
++from app.utils.rate_limiter import rate_limit_login
+
+
+-_rate_store = redis.Redis(host="cache.internal", port=6379)
+
+
+-def _rate_limited(ip):
+-    key = "login:" + ip
+-    hits = _rate_store.incr(key)
+-    if hits == 1:
+-        _rate_store.expire(key, 60)
+-    return hits > 5
++
++# Configuration from environment variables
++RATE_LIMIT_REDIS_HOST = os.environ.get('RATE_LIMIT_REDIS_HOST', 'localhost')
++RATE_LIMIT_REDIS_PORT = int(os.environ.get('RATE_LIMIT_REDIS_PORT', '6379'))
++RATE_LIMIT_REDIS_DB = int(os.environ.get('RATE_LIMIT_REDIS_DB', '0'))
++RATE_LIMIT_MAX_ATTEMPTS = int(os.environ.get('RATE_LIMIT_MAX_ATTEMPTS', '5'))
++RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get('RATE_LIMIT_WINDOW_SECONDS', '60'))
+ 
+ 
+ def login():
+-    if _rate_limited(request.remote_addr):
++    if rate_limit_login(
++        ip=request.remote_addr,
++        max_attempts=RATE_LIMIT_MAX_ATTEMPTS,
++        window_seconds=RATE_LIMIT_WINDOW_SECONDS,
++        redis_host=RATE_LIMIT_REDIS_HOST,
++        redis_port=RATE_LIMIT_REDIS_PORT,
++        redis_db=RATE_LIMIT_REDIS_DB
++    ):
+         return jsonify({"error": "too many attempts"}), 429
+     user = authenticate(request.form["username"], request.form["password"])
