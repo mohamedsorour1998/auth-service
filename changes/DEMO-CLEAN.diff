@@ -1,0 +1,61 @@
+diff --git a/app/middleware/rate_limiter.py b/app/middleware/rate_limiter.py
+new file mode 100644
+--- /dev/null
++++ b/app/middleware/rate_limiter.py
+@@ -0,0 +1,60 @@
+"""
+Rate limiting middleware for the application.
+"""
+
+import time
+from collections import defaultdict, deque
+from functools import wraps
+from flask import request, jsonify, current_app
+
+# Global rate limit store: {ip: deque(timestamp entries)}
+# Using defaultdict for automatic key creation
+_rate_limit_store = defaultdict(deque)
+
++def rate_limit(max_requests=5, window_seconds=60):
+    """
+    Decorator to rate limit a view function based on client IP.
+
+    Args:
+        max_requests (int): Maximum number of requests allowed within the window
+        window_seconds (int): Time window in seconds
+
+    Returns:
+        function: Wrapped view function with rate limiting
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # Get client IP from request
+            ip = request.remote_addr
+
+            # Get current timestamp
+            now = time.time()
+
+            # Get the deque for this IP
+            request_history = _rate_limit_store[ip]
+
+            # Remove old timestamps outside the window
+            while request_history and request_history[0] < now - window_seconds:
+                request_history.popleft()
+
+            # Check if max requests exceeded
+            if len(request_history) >= max_requests:
+                current_app.logger.warning(f"Rate limit exceeded for IP: {ip}")
+                return jsonify({
+                    'error': 'Too many requests',
+                    'message': f'Please try again after {window_seconds} seconds'
+                }), 429
+
+            # Add current request timestamp
+            request_history.append(now)
+
+            # Call the original function
+            return func(*args, **kwargs)
+
+        return wrapper
+    return decorator
