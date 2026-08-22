@@ -1,0 +1,71 @@
+diff --git a/app/auth.py b/app/auth.py
+index d9e6f1a..d5d8a2b 100644
+--- a/app/auth.py
++++ b/app/auth.py
+@@ -1,7 +1,12 @@
+ from flask import Blueprint, request, jsonify
+ from werkzeug.security import check_password_hash
+ from app.models import User, db
+ from app.email import send_password_reset_email
++from app.config import Config
++from datetime import timedelta
++import redis
++import os
+
+ auth = Blueprint('auth', __name__)
+
++
+# Rate limiting configuration
++RATE_LIMIT_MAX = int(os.getenv('RATE_LIMIT_MAX', '5'))
++RATE_LIMIT_WINDOW = int(os.getenv('RATE_LIMIT_WINDOW', '60'))  # seconds
++RATE_LIMIT_REDIS_URL = os.getenv('RATE_LIMIT_REDIS_URL', 'redis://localhost:6379/0')
+
++
+# Initialize Redis connection
++try:
++    redis_client = redis.Redis.from_url(RATE_LIMIT_REDIS_URL)
++    redis_client.ping()  # Test connection
++except redis.RedisError as e:
++    print(f"Redis connection error: {e}")
++    redis_client = None
+
+ @auth.route('/login', methods=['POST'])
+ def login():
+     data = request.get_json()
+     username = data.get('username')
+     password = data.get('password')
+
+     if not username or not password:
+         return jsonify({'error': 'Missing username or password'}), 400
+
+     user = User.query.filter_by(username=username).first()
+
+     if user and check_password_hash(user.password_hash, password):
++        # Reset rate limit on successful login
++        if redis_client:
++            key = f'rate_limit_login:{request.remote_addr}'
++            redis_client.delete(key)
+         return jsonify({'message': 'Login successful'}), 200
+     else:
++        # Rate limiting logic
++        if redis_client:
++            key = f'rate_limit_login:{request.remote_addr}'
++            current_count = redis_client.get(key)
++            current_count = int(current_count) if current_count else 0
++
++            if current_count >= RATE_LIMIT_MAX:
++                return jsonify({'error': 'Too many login attempts. Please try again later.'}), 429
++
++            # Increment count and set expiration
++            redis_client.incr(key)
++            if current_count == 0:
++                redis_client.expire(key, RATE_LIMIT_WINDOW)
++
+         return jsonify({'error': 'Invalid username or password'}), 401
+
+ @auth.route('/forgot-password', methods=['POST'])
+ def forgot_password():
+     data = request.get_json()
+     username = data.get('username')
+
+     user = User.query.filter_by(username=username).first()
