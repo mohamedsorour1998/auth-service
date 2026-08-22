@@ -1,0 +1,56 @@
+--- a/app/auth/middleware.py
++++ b/app/auth/middleware.py
+@@ -0,0 +1,54 @@
+import redis
+from flask import request, g, abort, jsonify
+import os
+from datetime import datetime, timedelta
+
+# Initialize Redis connection
+redis_client = redis.from_url(os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
+
+RATE_LIMIT_KEY_PREFIX = 'login_attempts:'
+MAX_ATTEMPTS = int(os.environ.get('LOGIN_MAX_ATTEMPTS', '5'))
+RATE_LIMIT_WINDOW = int(os.environ.get('LOGIN_RATE_WINDOW', '3600'))  # seconds
+
+
+def rate_limit_login():
+    """
+    Middleware to rate limit login attempts based on IP address.
+    
+    Aborts the request with 429 if rate limit is exceeded.
+    """
+    ip = request.remote_addr
+    if not ip:
+        return
+
+    current_time = datetime.utcnow().timestamp()
+    window_start = current_time - RATE_LIMIT_WINDOW
+
+    # Create a key for this IP's login attempts
+    rate_limit_key = f"{RATE_LIMIT_KEY_PREFIX}{ip}"
+
+    # Get current attempts from Redis
+    attempts = redis_client.zcount(rate_limit_key, window_start, current_time)
+
+    # If too many attempts, reject the request
+    if attempts >= MAX_ATTEMPTS:
+        # Log rate limit trigger
+        print(f"Rate limit triggered for IP {ip}. Attempts: {attempts}")
+        abort(429, description="Too many login attempts. Please try again later.")
+
+    # If under limit, record this attempt
+    redis_client.zadd(rate_limit_key, {current_time: current_time})
+    
+    # Clean up old entries after RATE_LIMIT_WINDOW
+    redis_client.zremrangebyscore(rate_limit_key, 0, window_start)
+
+
+def init_rate_limiting(app):
+    """
+    Initialize rate limiting by registering the middleware.
+    
+    This function should be called from create_app() after all routes are defined.
+    """
+    # Register before_request handler
+    app.before_request(rate_limit_login)
