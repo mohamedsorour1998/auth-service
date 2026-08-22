@@ -1,0 +1,64 @@
+# The tests the Agent Org's SRE agent reads before it recommends a deploy.
+#
+# Deliberately minimal: this repository is the SUBJECT of a demo pipeline, not
+# the pipeline. What matters is that a real check runs on every push and every
+# pull request, so `github_ops.ci_status` has something true to report.
+#
+# BEFORE THIS FILE EXISTED, MEASURED 2026-08-22:
+#
+#   gh api repos/mohamedsorour1998/auth-service/contents/.github/workflows
+#   {"message":"Not Found","status":"404"}
+#
+#   gh api repos/.../commits/480111175afd/status --jq '{state, total_count}'
+#   {"state":"pending","total_count":0}
+#
+# GitHub reports `pending` when NOTHING has run, which is indistinguishable from
+# "still running" if you read that field. "No CI has ever run here" is not the
+# same fact as "CI is still running", and neither is "CI passed" -- so with zero
+# checks the SRE agent has to answer `unknown`, and this workflow is what lets it
+# answer anything else.
+#
+# `python -m pytest`, NEVER bare `pytest`. MEASURED in a clean venv on this
+# repository, both against the same tests:
+#
+#   python -m pytest tests -q   ->  1 passed
+#   pytest tests -q             ->  ModuleNotFoundError: No module named 'app'
+#
+# `python -m` prepends the working directory to sys.path; the console script does
+# not, and `tests/test_auth.py` imports `app.auth` with no packaging to resolve
+# it. Do not harmonise these two spellings -- they are not interchangeable here.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Read-only at the top level. This workflow runs on pull_request, so a fork's PR
+# could otherwise reach a write-scoped token; nothing here needs to write.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # requirements.txt holds the app's runtime deps (flask, redis); pytest is
+      # the test runner and is deliberately not pinned into it, so the app's
+      # dependency list stays the app's.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      - name: Test
+        run: python -m pytest tests -q
