@@ -1,0 +1,76 @@
+--- a/auth/middleware/rate_limiter.go
++++ b/auth/middleware/rate_limiter.go
+@@ -0,0 +1,56 @@
++package auth
+
++import (
++    "net/http"
++    "sync"
++    "time"
++
++    "github.com/go-redis/redis/v8"
++    "golang.org/x/context"
++)
++
++// RateLimiter holds Redis connection and rate limit configuration
++type RateLimiter struct {
++    db      *redis.Client
++    rwm     sync.RWMutex
++    limit   int
++    window  time.Duration
++    ctx     context.Context
++}
++
++// NewRateLimiter creates a new rate limiter with config
++func NewRateLimiter(redisURL string, limit int, window time.Duration) (*RateLimiter, error) {
++    db := redis.NewClient(&redis.Options{Addr: redisURL})
++    _, err := db.Ping(context.Background()).Result()
++    if err != nil {
++        return nil, err
++    }
++    return &RateLimiter{
++        db:      db,
++        limit:   limit,
++        window:  window,
++        ctx:     context.Background(),
++    }, nil
++}
++
++// GetKey constructs a Redis key incorporating the window duration
++func (rl *RateLimiter) GetKey(ip string) string {
++    return "login:" + ip + ":" + rl.window.String()
++}
++
++// LimitExceeded returns true if IP has exceeded allowed attempts
++func (rl *RateLimiter) LimitExceeded(ip string) (bool, int, error) {
++    key := rl.GetKey(ip)
++    result, err := rl.db.Incr(rl.ctx, key).Result()
++    if err != nil {
++        return false, 0, err
++    }
++    if result == 1 {
++        err = rl.db.Expire(rl.ctx, key, rl.window).Err()
++        if err != nil {
++            return false, 0, err
++        }
++    }
++    return result > int64(rl.limit), int(result), nil
++}
++
++// Middleware wraps handlers with rate limiting
++func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
++    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++        ip := r.RemoteAddr
++        exceeded, count, err := rl.LimitExceeded(ip)
++        if err != nil {
++            http.Error(w, "Rate limit error", http.StatusInternalServerError)
++            return
++        }
++        if exceeded {
++            w.Header().Set("Retry-After", rl.window.String())
++            http.Error(w, "Too many attempts", http.StatusTooManyRequests)
++            return
++        }
++        next.ServeHTTP(w, r)
++    })
++}
