@@ -1,0 +1,49 @@
+diff --git a/app/auth.py b/app/auth.py
+index d548f2a..e3a7b9c 100644
+--- a/app/auth.py
++++ b/app/auth.py
+@@ -1,9 +1,12 @@
+from flask import Blueprint, request, jsonify
++from flask import current_app as app
+ from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
+ from models import User, db
+ import os
++import time
++import redis
+
+ auth_bp = Blueprint('auth', __name__)
+
+-# Read configuration from environment variables
+-RATE_LIMIT_PER_MINUTE = int(os.getenv('RATE_LIMIT_PER_MINUTE', '5'))
+-REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+-@app.before_request
++@auth_bp.before_request
+def init_redis():
+    if not hasattr(app, 'redis'):
+        app.redis = redis.Redis.from_url(os.getenv('REDIS_URL', 'redis://localhost:6379/0'))
+
+ @auth_bp.route('/login', methods=['POST'])
+def login():
+     # Get JSON data from request
+     data = request.get_json()
+     username = data.get('username')
+     password = data.get('password')
+
+     # Get client IP
+     client_ip = request.remote_addr
+
+     # Check rate limit
+     current_time = time.time()
+     
+     # Get recent requests count from Redis
+-    recent_requests = app.redis.zcount(f'rate_limit:{client_ip}', current_time - 60, current_time)
+-    
+-    # Check if limit exceeded
+-    if recent_requests >= RATE_LIMIT_PER_MINUTE:
++    recent_requests = app.redis.zcount(f'rate_limit:{client_ip}', current_time - 60, current_time)
++    if recent_requests >= int(os.getenv('RATE_LIMIT_PER_MINUTE', '5')):
+             return jsonify({"msg": "Rate limit exceeded"}), 429
+
+     # Add current timestamp to Redis sorted set
+     app.redis.zadd(f'rate_limit:{client_ip}', {current_time: current_time})
