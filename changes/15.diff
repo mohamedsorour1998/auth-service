@@ -1,0 +1,23 @@
+--- a/app/auth.py
++++ b/app/auth.py
+@@ -1,5 +1,21 @@
++import os
++
+ from flask import request, jsonify
++import redis
++
++_rate_store = redis.Redis.from_url(os.environ["REDIS_URL"])
++
++
++def _rate_limited(ip):
++    key = "login:" + ip
++    hits = _rate_store.incr(key)
++    if hits == 1:
++        _rate_store.expire(key, 60)
++    return hits > 5
+ 
+ 
+ def login():
++    if _rate_limited(request.remote_addr):
++        return jsonify({"error": "too many attempts"}), 429
+     user = authenticate(request.form["username"], request.form["password"])
