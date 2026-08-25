@@ -1,0 +1,57 @@
+--- a/app/auth.py
++++ b/app/auth.py
+@@ -1,19 +1,59 @@
+ """Minimal Flask login handler — the file the agents modify.
+
+ Owner: Reem. Keep this tiny; it only needs to be a realistic target for a diff.
+ """
+
+ from flask import request, jsonify
++import redis
++import os
++from datetime import timedelta
+
+ 
+def authenticate(username: str, password: str) -> bool:
+     # Placeholder auth — replaced/extended by the developer agent's diff.
+     return bool(username) and bool(password)
+
+
++# Rate limiting configuration
++RATE_LIMIT_MAX = int(os.getenv('RATE_LIMIT_MAX', '5'))
++RATE_LIMIT_WINDOW = int(os.getenv('RATE_LIMIT_WINDOW', '60'))  # seconds
++
++# Initialize Redis connection
++try:
++    redis_client = redis.Redis(host=os.getenv('REDIS_HOST', 'localhost'), port=int(os.getenv('REDIS_PORT', '6379')), db=0)
++    redis_client.ping()  # Test connection
+except redis.RedisError as e:
++    print(f"Redis connection error: {e}")
++    redis_client = None
++
+
+def login():
++    # Rate limiting logic before authentication
++    if redis_client:
++        key = f'rate_limit_login:{request.remote_addr}'
++        current_count = redis_client.get(key)
++        current_count = int(current_count) if current_count else 0
++
++        if current_count >= RATE_LIMIT_MAX:
++            return jsonify({"error": "too many requests, try again later"}), 429
++
++        # Increment count and set expiration only on failed attempt
++        redis_client.incr(key)
++        if current_count == 0:
++            redis_client.expire(key, RATE_LIMIT_WINDOW)
++
+     user = authenticate(request.form["username"], request.form["password"])
+     if not user:
+         return jsonify({"error": "invalid credentials"}), 401
+-    return jsonify({"ok": True}), 200
++    # Reset rate limit on successful login
++    if redis_client:
++        key = f'rate_limit_login:{request.remote_addr}'
++        redis_client.delete(key)
++
++    return jsonify({"ok": True}), 200
