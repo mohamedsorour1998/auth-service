@@ -1,0 +1,72 @@
+--- a/app/auth.py
++++ b/app/auth.py
+@@ -1,21 +1,66 @@
+ """Minimal Flask login handler — the file the agents modify.
+
+ Owner: Reem. Keep this tiny; it only needs to be a realistic target for a diff.
+ """
+
+ from flask import request, jsonify
++import redis
++import os
++from datetime import timedelta
+
+
+ def authenticate(username: str, password: str) -> bool:
+     # Placeholder auth — replaced/extended by the developer agent's diff.
+     return bool(username) and bool(password)
+
+
++# Rate limiting configuration constants
++RATE_LIMIT_MAX = int(os.getenv('RATE_LIMIT_MAX', '3'))
++RATE_LIMIT_WINDOW = int(os.getenv('RATE_LIMIT_WINDOW', '60'))  # seconds
++
++# Initialize Redis client with error handling
++try:
++    redis_client = redis.Redis(
++        host=os.getenv('REDIS_HOST', 'localhost'),
++        port=int(os.getenv('REDIS_PORT', '6379')),
++        db=0
++    )
++    redis_client.ping()  # Test connection
++except (redis.RedisError, ConnectionError) as e:
++    print(f"Redis connection error: {e}")
++    redis_client = None
++
+
+def login():
++    # Get client's IP address for rate limiting
++    client_ip = request.remote_addr
++    
++    # Apply rate limiting if Redis is available
++    if redis_client and client_ip:
++        rate_key = f'login_attempts:{client_ip}'
++        
++        # Get current attempt count
++        current_attempts = redis_client.get(rate_key)
++        current_attempts = int(current_attempts) if current_attempts else 0
++        
++        # Check if rate limit is exceeded
++        if current_attempts >= RATE_LIMIT_MAX:
++            return jsonify({"error": "rate limit exceeded, try again later"}), 429
++        
++        # Increment attempt count
++        redis_client.incr(rate_key)
++        
++        # Set expiration only if this is the first attempt
++        if current_attempts == 0:
++            redis_client.expire(rate_key, RATE_LIMIT_WINDOW)
++    
++
+     user = authenticate(request.form["username"], request.form["password"])
+     if not user:
+         return jsonify({"error": "invalid credentials"}), 401
+-
+-    return jsonify({"ok": True}), 200
++    
++    # Reset rate limit on successful login if Redis is available
++    if redis_client and client_ip:
++        rate_key = f'login_attempts:{client_ip}'
++        redis_client.delete(rate_key)
++
++    return jsonify({"ok": True}), 200
