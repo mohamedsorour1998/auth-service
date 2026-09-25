@@ -1,0 +1,7 @@
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,2 +1,2 @@
+ flask>=3.0
+-redis>=5.0
++redis>=5.0
++requests==2.19.0
